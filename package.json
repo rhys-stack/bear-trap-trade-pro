@@ -1,0 +1,22 @@
+{
+  "name": "bear-trap-trade-pro",
+  "version": "1.0.0",
+  "description": "24/7 crypto trading bot for Bitget — Bear Trap strategy via TradingView webhooks",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "node --watch bot.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.13"
+  },
+  "keywords": ["trading", "bitget", "crypto", "tradingview", "webhook"],
+  "license": "MIT"
+}

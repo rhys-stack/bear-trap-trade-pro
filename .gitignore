@@ -1,0 +1,17 @@
+# Environment — never commit live secrets
+.env
+.env.local
+
+# Runtime trade data — contains position state
+trades.json
+history.json
+
+# Dependencies
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
