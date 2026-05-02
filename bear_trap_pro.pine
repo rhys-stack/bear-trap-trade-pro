@@ -411,22 +411,31 @@ alertcondition(tp3Hit,         "EXIT_TRADE",  "Bear Trap Trade Pro: EXIT (TP3 hi
 // =====================================================================
 
 alertBody(sig) =>
-    rrStr = not na(rrRatio) ? str.tostring(rrRatio, "#.##") : "0"
-    '{"strategy":"Bear Trap Trade Pro",' +
-    '"ticker":"'      + syminfo.ticker       + '",' +
-    '"timeframe":"'   + timeframe.period     + '",' +
-    '"signal":"'      + sig                  + '",' +
-    '"entry":'        + str.tostring(close, format.mintick)  + ',' +
-    '"stop":"'        + (not na(stopLevel)  ? str.tostring(stopLevel,  format.mintick) : "0") + '",' +
-    '"tp1":"'         + (not na(tp1Level)   ? str.tostring(tp1Level,   format.mintick) : "0") + '",' +
-    '"tp2":"'         + (not na(tp2Level)   ? str.tostring(tp2Level,   format.mintick) : "0") + '",' +
-    '"tp3":"'         + (not na(tp3Level)   ? str.tostring(tp3Level,   format.mintick) : "0") + '",' +
-    '"score":"'       + str.tostring(score)  + '",' +
-    '"risk_reward":"' + rrStr                + '",' +
-    '"htf_trend":"'   + (htfBullish ? "BULL" : "BEAR") + '",' +
-    '"ema_filter":"'  + (ema200Pass  ? "PASS" : "FAIL") + '",' +
-    '"order_type":"'  + i_orderType          + '",' +
-    '"timestamp":"{{time}}"}'
+    // Build each piece as a named variable first — avoids multi-line string
+    // continuation which confuses Pine Script's lexer with embedded quotes.
+    string rrStr  = not na(rrRatio)   ? str.tostring(rrRatio,   '#.##')         : '0'
+    string slStr  = not na(stopLevel) ? str.tostring(stopLevel, format.mintick) : '0'
+    string t1Str  = not na(tp1Level)  ? str.tostring(tp1Level,  format.mintick) : '0'
+    string t2Str  = not na(tp2Level)  ? str.tostring(tp2Level,  format.mintick) : '0'
+    string t3Str  = not na(tp3Level)  ? str.tostring(tp3Level,  format.mintick) : '0'
+    string htfStr = htfBullish ? 'BULL' : 'BEAR'
+    string emaStr = ema200Pass ? 'PASS' : 'FAIL'
+    string j = '{"strategy":"Bear Trap Trade Pro",'
+    j := j + '"ticker":"'      + syminfo.ticker                      + '",'
+    j := j + '"timeframe":"'   + timeframe.period                    + '",'
+    j := j + '"signal":"'      + sig                                 + '",'
+    j := j + '"entry":'        + str.tostring(close, format.mintick) + ','
+    j := j + '"stop":"'        + slStr  + '",'
+    j := j + '"tp1":"'         + t1Str  + '",'
+    j := j + '"tp2":"'         + t2Str  + '",'
+    j := j + '"tp3":"'         + t3Str  + '",'
+    j := j + '"score":"'       + str.tostring(score)                 + '",'
+    j := j + '"risk_reward":"' + rrStr                               + '",'
+    j := j + '"htf_trend":"'   + htfStr                              + '",'
+    j := j + '"ema_filter":"'  + emaStr                              + '",'
+    j := j + '"order_type":"'  + i_orderType                         + '",'
+    j := j + '"timestamp":"{{time}}"}'
+    j
 
 if bearTrapSignal
     alert(alertBody("BUY_SIGNAL"), alert.freq_once_per_bar_close)
