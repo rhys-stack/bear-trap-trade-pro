@@ -6,21 +6,21 @@ i_pivotLeft    = input.int(10,    "Pivot Left",         minval=2, maxval=50,  gr
 i_pivotRight   = input.int(10,    "Pivot Right",        minval=2, maxval=50,  group="Bear Trap")
 i_allowWick    = input.bool(true, "Allow Wick Sweep",   group="Bear Trap")
 i_minScore     = input.int(3,     "Min Score (1-5)",    minval=1, maxval=5,   group="Bear Trap")
-i_htfFilter    = input.bool(true,       "HTF Filter",   group="Filters")
-i_htfTf        = input.timeframe("240", "HTF Timeframe",group="Filters")
+i_htfFilter    = input.bool(true,       "HTF Filter",    group="Filters")
+i_htfTf        = input.timeframe("240", "HTF Timeframe", group="Filters")
 i_ema200Filter = input.bool(true,       "EMA 200 Filter",group="Filters")
-i_atrLen       = input.int(14,    "ATR Length",         minval=1,             group="Levels")
-i_atrSlBuf     = input.float(0.5, "ATR SL Buffer",      minval=0.1, step=0.1, group="Levels")
-i_tp1R         = input.float(1.0, "TP1 R-Multiple",     minval=0.5, step=0.1, group="Levels")
-i_tp2R         = input.float(2.0, "TP2 R-Multiple",     minval=1.0, step=0.1, group="Levels")
-i_volLen       = input.int(20,    "Vol Avg Length",     minval=5,             group="Confluence")
-i_volMult      = input.float(1.5, "Vol Spike Mult",     minval=1.0, step=0.1, group="Confluence")
-i_showSess     = input.bool(true,   "Show Sessions",    group="Display")
-i_showWeekend  = input.bool(true,   "Show Weekend",     group="Display")
-i_funding      = input.float(0.0,   "Funding Rate %",   step=0.001,           group="Display")
-i_acctSize     = input.float(1000.0,"Account (USDT)",   minval=1,             group="Display")
-i_riskPct      = input.float(2.0,   "Risk %",           minval=0.1, maxval=10,group="Display")
-i_leverage     = input.int(10,      "Leverage (liq)",   minval=1, maxval=125, group="Display")
+i_atrLen       = input.int(14,    "ATR Length",          minval=1,             group="Levels")
+i_atrSlBuf     = input.float(0.5, "ATR SL Buffer",       minval=0.1, step=0.1, group="Levels")
+i_tp1R         = input.float(1.0, "TP1 R-Multiple",      minval=0.5, step=0.1, group="Levels")
+i_tp2R         = input.float(2.0, "TP2 R-Multiple",      minval=1.0, step=0.1, group="Levels")
+i_volLen       = input.int(20,    "Vol Avg Length",      minval=5,             group="Confluence")
+i_volMult      = input.float(1.5, "Vol Spike Mult",      minval=1.0, step=0.1, group="Confluence")
+i_showSess     = input.bool(true,   "Show Sessions",     group="Display")
+i_showWeekend  = input.bool(true,   "Show Weekend",      group="Display")
+i_funding      = input.float(0.0,   "Funding Rate %",    step=0.001,           group="Display")
+i_acctSize     = input.float(1000.0,"Account (USDT)",    minval=1,             group="Display")
+i_riskPct      = input.float(2.0,   "Risk %",            minval=0.1, maxval=10,group="Display")
+i_leverage     = input.int(10,      "Leverage (liq)",    minval=1, maxval=125, group="Display")
 i_orderType    = input.string("Limit","Order Type", options=["Limit","Market"],group="Display")
 
 // ── CORE INDICATORS ─────────────────────────────────────────────────
@@ -34,7 +34,7 @@ htfEma200  = request.security(syminfo.tickerid, i_htfTf, ta.ema(close,200)[1], l
 htfBullish = htfClose > htfEma200
 
 // ── PIVOT DETECTION — no repainting ─────────────────────────────────
-// pivotlow/high only return a value after rightbars confirmed closes to the right
+// pivotlow/high only confirm after rightbars closed bars to the right of the pivot bar
 rawPivotLow  = ta.pivotlow(low,   i_pivotLeft, i_pivotRight)
 rawPivotHigh = ta.pivothigh(high, i_pivotLeft, i_pivotRight)
 
@@ -45,6 +45,7 @@ var float lastPivotHigh = na
 if not na(rawPivotLow)
     lastPivotLow := rawPivotLow
     lastPivotBar := bar_index - i_pivotRight
+
 if not na(rawPivotHigh)
     lastPivotHigh := rawPivotHigh
 
@@ -57,7 +58,7 @@ cvd1 = cvdProxy(open[1],high[1],low[1],close[1],volume[1])
 cvd2 = cvdProxy(open[2],high[2],low[2],close[2],volume[2])
 
 // ── BEAR TRAP DETECTION ─────────────────────────────────────────────
-// All sweep logic uses confirmed bars [1]/[2]. Fires at bar close only.
+// All sweep logic uses confirmed bars [1]/[2]. Signal fires at bar close only.
 validPivot    = not na(lastPivotLow) and bar_index > lastPivotBar + 1
 wickSweep     = validPivot and low[1]   < lastPivotLow and close[1] > lastPivotLow
 closeSweep    = validPivot and close[2] < lastPivotLow and close[1] > lastPivotLow
@@ -68,13 +69,9 @@ ema200Pass = close > ema200
 htfPass    = not i_htfFilter    or htfBullish
 ema200Gate = not i_ema200Filter or ema200Pass
 
-score = math.max(0,
-     (htfBullish                         ? 1 : 0)
-   + (ema200Pass                         ? 1 : 0)
-   + (volume[1] > volAvg[1] * i_volMult ? 1 : 0)
-   + (atr > atr[1]                      ? 1 : 0)
-   + (low[1] < low[2] and cvd1 > cvd2   ? 1 : 0)
-   - (i_funding > 0.001                 ? 1 : 0))
+// Split into two lines so each is a simple flat expression — no multi-line inside ()
+scoreRaw = (htfBullish ? 1 : 0) + (ema200Pass ? 1 : 0) + (volume[1] > volAvg[1] * i_volMult ? 1 : 0) + (atr > atr[1] ? 1 : 0) + (low[1] < low[2] and cvd1 > cvd2 ? 1 : 0)
+score    = math.max(0, scoreRaw - (i_funding > 0.001 ? 1 : 0))
 
 bearTrapSignal = bearTrapSetup and score >= i_minScore and htfPass and ema200Gate
 
@@ -93,16 +90,16 @@ if bearTrapSignal and not inTrade
     stopLevel  := low[1] - atr * i_atrSlBuf
     float risk = entryPrice - stopLevel
     tp1Level   := not na(lastPivotHigh) and lastPivotHigh > entryPrice and lastPivotHigh < entryPrice + risk * 2.0 ? lastPivotHigh : entryPrice + risk * i_tp1R
-    tp2Level   := not na(lastPivotHigh) and lastPivotHigh > tp1Level   ? lastPivotHigh : entryPrice + risk * i_tp2R
+    tp2Level   := not na(lastPivotHigh) and lastPivotHigh > tp1Level ? lastPivotHigh : entryPrice + risk * i_tp2R
     tp3Level   := entryPrice + risk * 3.0
     inTrade    := true
     lastSigBar := bar_index
     sigStatus  := "BUY"
 
-bool stopHit = inTrade and not na(stopLevel) and low  <= stopLevel
-bool tp1Hit  = inTrade and not na(tp1Level)  and high >= tp1Level
-bool tp2Hit  = inTrade and not na(tp2Level)  and high >= tp2Level
-bool tp3Hit  = inTrade and not na(tp3Level)  and high >= tp3Level
+stopHit = inTrade and not na(stopLevel) and low  <= stopLevel
+tp1Hit  = inTrade and not na(tp1Level)  and high >= tp1Level
+tp2Hit  = inTrade and not na(tp2Level)  and high >= tp2Level
+tp3Hit  = inTrade and not na(tp3Level)  and high >= tp3Level
 
 if inTrade and not bearTrapSignal
     sigStatus := "IN TRADE"
@@ -117,15 +114,15 @@ if stopHit or tp3Hit
     tp3Level   := na
 
 // ── DERIVED VALUES ──────────────────────────────────────────────────
-float riskAmt = inTrade ? math.abs(entryPrice - stopLevel) : na
-float rrRatio = not na(riskAmt) and riskAmt > 0 ? math.abs(tp2Level - entryPrice) / riskAmt : na
-float posSize = not na(riskAmt) and riskAmt > 0 ? i_acctSize * (i_riskPct / 100.0) / riskAmt : na
-float liqEst  = inTrade ? entryPrice * (1.0 - 0.9 / i_leverage) : na
+riskAmt  = inTrade ? math.abs(entryPrice - stopLevel) : na
+rrRatio  = not na(riskAmt) and riskAmt > 0 ? math.abs(tp2Level - entryPrice) / riskAmt : na
+posSize  = not na(riskAmt) and riskAmt > 0 ? i_acctSize * (i_riskPct / 100.0) / riskAmt : na
+liqEst   = inTrade ? entryPrice * (1.0 - 0.9 / i_leverage) : na
 
-int  utcH      = hour(time, "UTC")
-int  utcM      = minute(time, "UTC")
-int  dow       = dayofweek(time, "UTC")
-bool isWeekend = (dow == dayofweek.saturday and utcH >= 21) or (dow == dayofweek.sunday and utcH < 21)
+utcH      = hour(time, "UTC")
+utcM      = minute(time, "UTC")
+dow       = dayofweek(time, "UTC")
+isWeekend = (dow == dayofweek.saturday and utcH >= 21) or (dow == dayofweek.sunday and utcH < 21)
 
 // ── OVERLAYS ────────────────────────────────────────────────────────
 plot(ema200,       "EMA 200",   color=color.new(color.yellow, 0), linewidth=2)
@@ -136,12 +133,14 @@ if bearTrapSignal
               style=label.style_label_up, color=color.new(color.green, 15), textcolor=color.white, size=size.small)
 
 if not na(rawPivotLow)
-    label.new(bar_index - i_pivotRight, rawPivotLow,  ".", style=label.style_label_up,
-              color=color.new(color.red,  40), textcolor=color.red,  size=size.tiny)
-if not na(rawPivotHigh)
-    label.new(bar_index - i_pivotRight, rawPivotHigh, ".", style=label.style_label_down,
-              color=color.new(color.teal, 40), textcolor=color.teal, size=size.tiny)
+    label.new(bar_index - i_pivotRight, rawPivotLow, ".",
+              style=label.style_label_up, color=color.new(color.red, 40), textcolor=color.red, size=size.tiny)
 
+if not na(rawPivotHigh)
+    label.new(bar_index - i_pivotRight, rawPivotHigh, ".",
+              style=label.style_label_down, color=color.new(color.teal, 40), textcolor=color.teal, size=size.tiny)
+
+// Trade level lines — delete old set on each new signal, redraw 60 bars forward
 var line ln_entry = na
 var line ln_sl    = na
 var line ln_tp1   = na
@@ -149,11 +148,16 @@ var line ln_tp2   = na
 var line ln_tp3   = na
 
 if bearTrapSignal and not inTrade[1]
-    if not na(ln_entry) line.delete(ln_entry)
-    if not na(ln_sl)    line.delete(ln_sl)
-    if not na(ln_tp1)   line.delete(ln_tp1)
-    if not na(ln_tp2)   line.delete(ln_tp2)
-    if not na(ln_tp3)   line.delete(ln_tp3)
+    if not na(ln_entry)
+        line.delete(ln_entry)
+    if not na(ln_sl)
+        line.delete(ln_sl)
+    if not na(ln_tp1)
+        line.delete(ln_tp1)
+    if not na(ln_tp2)
+        line.delete(ln_tp2)
+    if not na(ln_tp3)
+        line.delete(ln_tp3)
     e = bar_index + 60
     ln_entry := line.new(bar_index, entryPrice, e, entryPrice, color=color.blue,  width=2, style=line.style_dashed)
     ln_sl    := line.new(bar_index, stopLevel,  e, stopLevel,  color=color.red,   width=2, style=line.style_dashed)
@@ -161,59 +165,67 @@ if bearTrapSignal and not inTrade[1]
     ln_tp2   := line.new(bar_index, tp2Level,   e, tp2Level,   color=color.green, width=2, style=line.style_dashed)
     ln_tp3   := line.new(bar_index, tp3Level,   e, tp3Level,   color=color.teal,  width=1, style=line.style_dotted)
 
+// Session open labels — each body must be on its own indented line
 if i_showSess
-    if utcH == 0  and utcM == 0  label.new(bar_index, high, "Asia",   style=label.style_label_down, color=color.new(color.blue,   65), textcolor=color.white, size=size.tiny)
-    if utcH == 8  and utcM == 0  label.new(bar_index, high, "London", style=label.style_label_down, color=color.new(color.orange, 65), textcolor=color.white, size=size.tiny)
-    if utcH == 13 and utcM == 0  label.new(bar_index, high, "NY",     style=label.style_label_down, color=color.new(color.purple, 65), textcolor=color.white, size=size.tiny)
+    if utcH == 0 and utcM == 0
+        label.new(bar_index, high, "Asia",   style=label.style_label_down, color=color.new(color.blue,   65), textcolor=color.white, size=size.tiny)
+    if utcH == 8 and utcM == 0
+        label.new(bar_index, high, "London", style=label.style_label_down, color=color.new(color.orange, 65), textcolor=color.white, size=size.tiny)
+    if utcH == 13 and utcM == 0
+        label.new(bar_index, high, "NY",     style=label.style_label_down, color=color.new(color.purple, 65), textcolor=color.white, size=size.tiny)
 
 if i_showWeekend and isWeekend and barstate.islast
-    label.new(bar_index, high, "WEEKEND LOW LIQ", style=label.style_label_down, color=color.new(color.red, 25), textcolor=color.white, size=size.small)
+    label.new(bar_index, high, "WEEKEND LOW LIQ",
+              style=label.style_label_down, color=color.new(color.red, 25), textcolor=color.white, size=size.small)
 
 // ── DASHBOARD ───────────────────────────────────────────────────────
-var table dash = table.new(position.top_right, 2, 20, bgcolor=color.new(color.black, 25),
-     border_color=color.new(color.gray, 50), border_width=1, frame_color=color.new(color.gray, 30), frame_width=1)
+var table dash = table.new(position.top_right, 2, 20,
+     bgcolor=color.new(color.black, 25), border_color=color.new(color.gray, 50),
+     border_width=1, frame_color=color.new(color.gray, 30), frame_width=1)
 
-f_cell(col, row, txt, bg, tc) => table.cell(dash, col, row, txt, bgcolor=bg, text_color=tc, text_size=size.small)
+f_cell(col, row, txt, bg, tc) =>
+    table.cell(dash, col, row, txt, bgcolor=bg, text_color=tc, text_size=size.small)
 
+// Multi-line chained ternary: each line ending with : is a valid continuation in Pine Script
 sBg(s) =>
     s == "BUY"      ? color.new(color.green, 15) :
     s == "IN TRADE" ? color.new(color.blue,  20) :
-    s == "EXIT"     ? color.new(color.red,   20) : color.new(color.gray, 45)
+    s == "EXIT"     ? color.new(color.red,   20) :
+    color.new(color.gray, 45)
 
 if barstate.islast
-    color H  = color.new(color.navy,   20)
-    color R  = color.new(color.black,  40)
-    color OK = color.new(color.green,  25)
-    color FL = color.new(color.red,    30)
-    color WN = color.new(color.orange, 25)
-    color W  = color.white
-    color S  = color.silver
-    string fn = format.mintick
+    H  = color.new(color.navy,   20)
+    R  = color.new(color.black,  40)
+    OK = color.new(color.green,  25)
+    FL = color.new(color.red,    30)
+    WN = color.new(color.orange, 25)
+    W  = color.white
+    S  = color.silver
 
     f_cell(0, 0, "BEAR TRAP TRADE PRO",  H,  color.aqua)
     f_cell(1, 0, "v1.0",                 H,  S)
     f_cell(0, 1, "Ticker",               R,  S)
     f_cell(1, 1, syminfo.ticker,         R,  W)
-    f_cell(0, 2, "Timeframe",            R,  S)
+    f_cell(0, 2, "Timeframe",            R,  W)
     f_cell(1, 2, timeframe.period,       R,  W)
     f_cell(0, 3, "Status",               R,  S)
     f_cell(1, 3, sigStatus,              sBg(sigStatus), W)
     f_cell(0, 4, "Score",                R,  S)
     f_cell(1, 4, str.tostring(score) + "/5", score >= i_minScore ? OK : FL, W)
     f_cell(0, 5, "Entry",                R,  S)
-    f_cell(1, 5, inTrade ? str.tostring(entryPrice, fn) : "—",  R,  W)
+    f_cell(1, 5, inTrade ? str.tostring(entryPrice, format.mintick) : "--", R, W)
     f_cell(0, 6, "Stop",                 R,  S)
-    f_cell(1, 6, inTrade ? str.tostring(stopLevel,  fn) : "—",  R,  color.red)
+    f_cell(1, 6, inTrade ? str.tostring(stopLevel,  format.mintick) : "--", R, color.red)
     f_cell(0, 7, "TP1 (40%)",            R,  S)
-    f_cell(1, 7, inTrade ? str.tostring(tp1Level,   fn) : "—",  R,  color.lime)
+    f_cell(1, 7, inTrade ? str.tostring(tp1Level,   format.mintick) : "--", R, color.lime)
     f_cell(0, 8, "TP2 (40%)",            R,  S)
-    f_cell(1, 8, inTrade ? str.tostring(tp2Level,   fn) : "—",  R,  color.lime)
+    f_cell(1, 8, inTrade ? str.tostring(tp2Level,   format.mintick) : "--", R, color.lime)
     f_cell(0, 9, "TP3 (20%)",            R,  S)
-    f_cell(1, 9, inTrade ? str.tostring(tp3Level,   fn) : "—",  R,  color.teal)
+    f_cell(1, 9, inTrade ? str.tostring(tp3Level,   format.mintick) : "--", R, color.teal)
     f_cell(0,10, "R/R",                  R,  S)
-    f_cell(1,10, not na(rrRatio) ? str.tostring(rrRatio, "#.##") + ":1" : "—", R, W)
+    f_cell(1,10, not na(rrRatio) ? str.tostring(rrRatio, "#.##") + ":1" : "--", R, W)
     f_cell(0,11, "Last Signal",          R,  S)
-    f_cell(1,11, not na(lastSigBar) ? str.tostring(bar_index - lastSigBar) + " bars" : "—", R, W)
+    f_cell(1,11, not na(lastSigBar) ? str.tostring(bar_index - lastSigBar) + " bars" : "--", R, W)
     f_cell(0,12, "HTF Trend",            R,  S)
     f_cell(1,12, htfBullish  ? "PASS" : "FAIL", htfBullish  ? OK : FL, W)
     f_cell(0,13, "EMA 200",              R,  S)
@@ -223,40 +235,42 @@ if barstate.islast
     f_cell(0,15, "Funding Rate",         R,  S)
     f_cell(1,15, str.tostring(i_funding * 100.0, "#.###") + "%", i_funding > 0.001 ? WN : R, W)
     f_cell(0,16, "Liq. Estimate",        R,  S)
-    f_cell(1,16, inTrade ? str.tostring(liqEst, fn) : "—", R, color.orange)
+    f_cell(1,16, inTrade ? str.tostring(liqEst, format.mintick) : "--", R, color.orange)
     f_cell(0,17, "Pos. Size",            R,  S)
-    f_cell(1,17, not na(posSize) ? str.tostring(posSize, "#.####") : "—", R, W)
+    f_cell(1,17, not na(posSize) ? str.tostring(posSize, "#.####") : "--", R, W)
     f_cell(0,18, "ATR",                  R,  S)
-    f_cell(1,18, str.tostring(atr, fn),  R,  W)
+    f_cell(1,18, str.tostring(atr, format.mintick), R, W)
     f_cell(0,19, "Bot Status",           R,  S)
     f_cell(1,19, "CONNECTED",            OK, W)
 
-// ── ALERTS ──────────────────────────────────────────────────────────
+// ── ALERT CONDITIONS ────────────────────────────────────────────────
 alertcondition(bearTrapSignal, "BUY_SIGNAL", "Bear Trap: BUY SIGNAL")
 alertcondition(tp1Hit,         "TP1_HIT",    "Bear Trap: TP1 HIT")
 alertcondition(tp2Hit,         "TP2_HIT",    "Bear Trap: TP2 HIT")
 alertcondition(stopHit,        "EXIT_TRADE", "Bear Trap: EXIT (stop)")
 alertcondition(tp3Hit,         "EXIT_TRADE", "Bear Trap: EXIT (TP3)")
 
+// ── WEBHOOK PAYLOAD ─────────────────────────────────────────────────
+// Each field is built as a separate assignment to avoid multi-line string concat issues
 alertBody(sig) =>
-    string rrStr = not na(rrRatio)   ? str.tostring(rrRatio,   '#.##')         : '0'
-    string slStr = not na(stopLevel) ? str.tostring(stopLevel, format.mintick) : '0'
-    string t1Str = not na(tp1Level)  ? str.tostring(tp1Level,  format.mintick) : '0'
-    string t2Str = not na(tp2Level)  ? str.tostring(tp2Level,  format.mintick) : '0'
-    string t3Str = not na(tp3Level)  ? str.tostring(tp3Level,  format.mintick) : '0'
+    string rrStr = not na(rrRatio)   ? str.tostring(rrRatio,   "#.##")         : "0"
+    string slStr = not na(stopLevel) ? str.tostring(stopLevel, format.mintick) : "0"
+    string t1Str = not na(tp1Level)  ? str.tostring(tp1Level,  format.mintick) : "0"
+    string t2Str = not na(tp2Level)  ? str.tostring(tp2Level,  format.mintick) : "0"
+    string t3Str = not na(tp3Level)  ? str.tostring(tp3Level,  format.mintick) : "0"
     string j = '{"strategy":"Bear Trap Trade Pro",'
     j := j + '"ticker":"'      + syminfo.ticker                      + '",'
     j := j + '"timeframe":"'   + timeframe.period                    + '",'
     j := j + '"signal":"'      + sig                                 + '",'
     j := j + '"entry":'        + str.tostring(close, format.mintick) + ','
-    j := j + '"stop":"'        + slStr  + '",'
-    j := j + '"tp1":"'         + t1Str  + '",'
-    j := j + '"tp2":"'         + t2Str  + '",'
-    j := j + '"tp3":"'         + t3Str  + '",'
+    j := j + '"stop":"'        + slStr + '",'
+    j := j + '"tp1":"'         + t1Str + '",'
+    j := j + '"tp2":"'         + t2Str + '",'
+    j := j + '"tp3":"'         + t3Str + '",'
     j := j + '"score":"'       + str.tostring(score)                 + '",'
     j := j + '"risk_reward":"' + rrStr                               + '",'
-    j := j + '"htf_trend":"'   + (htfBullish ? 'BULL' : 'BEAR')     + '",'
-    j := j + '"ema_filter":"'  + (ema200Pass ? 'PASS' : 'FAIL')     + '",'
+    j := j + '"htf_trend":"'   + (htfBullish ? "BULL" : "BEAR")     + '",'
+    j := j + '"ema_filter":"'  + (ema200Pass ? "PASS" : "FAIL")     + '",'
     j := j + '"order_type":"'  + i_orderType                        + '",'
     j := j + '"timestamp":"{{time}}"}'
     j
