@@ -186,12 +186,8 @@ var table dash = table.new(position.top_right, 2, 20,
 f_cell(col, row, txt, bg, tc) =>
     table.cell(dash, col, row, txt, bgcolor=bg, text_color=tc, text_size=size.small)
 
-// Multi-line chained ternary: each line ending with : is a valid continuation in Pine Script
 sBg(s) =>
-    s == "BUY"      ? color.new(color.green, 15) :
-    s == "IN TRADE" ? color.new(color.blue,  20) :
-    s == "EXIT"     ? color.new(color.red,   20) :
-    color.new(color.gray, 45)
+    s == "BUY" ? color.new(color.green, 15) : s == "IN TRADE" ? color.new(color.blue, 20) : s == "EXIT" ? color.new(color.red, 20) : color.new(color.gray, 45)
 
 if barstate.islast
     H  = color.new(color.navy,   20)
