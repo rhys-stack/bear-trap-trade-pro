@@ -174,8 +174,10 @@ if i_showSess
     if utcH == 13 and utcM == 0
         label.new(bar_index, high, "NY",     style=label.style_label_down, color=color.new(color.purple, 65), textcolor=color.white, size=size.tiny)
 
+var label lbl_weekend = na
 if i_showWeekend and isWeekend and barstate.islast
-    label.new(bar_index, high, "WEEKEND LOW LIQ",
+    label.delete(lbl_weekend)
+    lbl_weekend := label.new(bar_index, high, "WEEKEND LOW LIQ",
               style=label.style_label_down, color=color.new(color.red, 25), textcolor=color.white, size=size.small)
 
 // ── DASHBOARD ───────────────────────────────────────────────────────
