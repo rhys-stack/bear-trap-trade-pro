@@ -2,39 +2,41 @@
 indicator("Bear Trap Trade Pro", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
 // ── INPUTS ──────────────────────────────────────────────────────────
-i_pivotLeft    = input.int(10,    "Pivot Left",         minval=2, maxval=50,  group="Bear Trap")
-i_pivotRight   = input.int(10,    "Pivot Right",        minval=2, maxval=50,  group="Bear Trap")
-i_allowWick    = input.bool(true, "Allow Wick Sweep",   group="Bear Trap")
-i_minScore     = input.int(3,     "Min Score (1-5)",    minval=1, maxval=5,   group="Bear Trap")
-i_htfFilter    = input.bool(true,       "HTF Filter",    group="Filters")
-i_htfTf        = input.timeframe("240", "HTF Timeframe", group="Filters")
-i_ema200Filter = input.bool(true,       "EMA 200 Filter",group="Filters")
-i_atrLen       = input.int(14,    "ATR Length",          minval=1,             group="Levels")
-i_atrSlBuf     = input.float(0.5, "ATR SL Buffer",       minval=0.1, step=0.1, group="Levels")
-i_tp1R         = input.float(1.0, "TP1 R-Multiple",      minval=0.5, step=0.1, group="Levels")
-i_tp2R         = input.float(2.0, "TP2 R-Multiple",      minval=1.0, step=0.1, group="Levels")
-i_volLen       = input.int(20,    "Vol Avg Length",      minval=5,             group="Confluence")
-i_volMult      = input.float(1.5, "Vol Spike Mult",      minval=1.0, step=0.1, group="Confluence")
-i_showSess     = input.bool(true,   "Show Sessions",     group="Display")
-i_showWeekend  = input.bool(true,   "Show Weekend",      group="Display")
-i_funding      = input.float(0.0,   "Funding Rate %",    step=0.001,           group="Display")
-i_acctSize     = input.float(1000.0,"Account (USDT)",    minval=1,             group="Display")
-i_riskPct      = input.float(2.0,   "Risk %",            minval=0.1, maxval=10,group="Display")
-i_leverage     = input.int(10,      "Leverage (liq)",    minval=1, maxval=125, group="Display")
-i_orderType    = input.string("Limit","Order Type", options=["Limit","Market"],group="Display")
+i_pivotLeft      = input.int(10,     "Pivot Left",           minval=2,  maxval=50,  group="Bear Trap")
+i_pivotRight     = input.int(10,     "Pivot Right",          minval=2,  maxval=50,  group="Bear Trap")
+i_allowWick      = input.bool(true,  "Allow Wick Sweep",                             group="Bear Trap")
+i_minScore       = input.int(2,      "Min Score (1-5)",      minval=1,  maxval=5,   group="Bear Trap")
+i_htfFilter      = input.bool(false,       "HTF Filter",                             group="Filters")
+i_htfTf          = input.timeframe("240",  "HTF Timeframe",                          group="Filters")
+i_ema200Filter   = input.bool(true,        "EMA 200 Filter",                         group="Filters")
+i_minRR          = input.float(1.5,  "Min R:R",              minval=0.5, step=0.1,  group="Filters")
+i_maxSlAtr       = input.float(2.0,  "Max Stop (ATR x)",     minval=0.5, step=0.1,  group="Filters")
+i_atrLen         = input.int(14,     "ATR Length",           minval=1,               group="Levels")
+i_atrSlBuf       = input.float(0.3,  "ATR SL Buffer",        minval=0.1, step=0.1,  group="Levels")
+i_tp1R           = input.float(1.0,  "TP1 R-Multiple",       minval=0.5, step=0.1,  group="Levels")
+i_tp2R           = input.float(2.0,  "TP2 R-Multiple",       minval=1.0, step=0.1,  group="Levels")
+i_maxBarsInTrade = input.int(50,     "Max Bars in Trade",    minval=5,  maxval=200,  group="Risk")
+i_maxLossPct     = input.float(1.5,  "Max Loss Cap %",       minval=0.1, maxval=10,  group="Risk")
+i_volLen         = input.int(20,     "Vol Avg Length",       minval=5,               group="Confluence")
+i_volMult        = input.float(1.5,  "Vol Spike Mult",       minval=1.0, step=0.1,  group="Confluence")
+i_showSess       = input.bool(true,  "Show Sessions",                                group="Display")
+i_showWeekend    = input.bool(true,  "Show Weekend",                                 group="Display")
+i_funding        = input.float(0.0,  "Funding Rate %",       step=0.001,             group="Display")
+i_acctSize       = input.float(1000.0,"Account (USDT)",      minval=1,               group="Display")
+i_riskPct        = input.float(2.0,  "Risk %",               minval=0.1, maxval=10,  group="Display")
+i_leverage       = input.int(10,     "Leverage (liq)",       minval=1, maxval=125,   group="Display")
+i_orderType      = input.string("Limit","Order Type", options=["Limit","Market"],    group="Display")
 
 // ── CORE INDICATORS ─────────────────────────────────────────────────
 atr    = ta.atr(i_atrLen)
 ema200 = ta.ema(close, 200)
 volAvg = ta.sma(volume, i_volLen)
 
-// HTF — [1] + lookahead_off: reads only fully closed HTF bars, no repainting
 htfClose   = request.security(syminfo.tickerid, i_htfTf, close[1],             lookahead=barmerge.lookahead_off)
 htfEma200  = request.security(syminfo.tickerid, i_htfTf, ta.ema(close,200)[1], lookahead=barmerge.lookahead_off)
 htfBullish = htfClose > htfEma200
 
-// ── PIVOT DETECTION — no repainting ─────────────────────────────────
-// pivotlow/high only confirm after rightbars closed bars to the right of the pivot bar
+// ── PIVOT DETECTION ─────────────────────────────────────────────────
 rawPivotLow  = ta.pivotlow(low,   i_pivotLeft, i_pivotRight)
 rawPivotHigh = ta.pivothigh(high, i_pivotLeft, i_pivotRight)
 
@@ -54,70 +56,135 @@ cvdProxy(o, h, l, c, v) =>
     r = h - l
     r > 0.0 ? ((c - l) - (h - c)) / r * v : 0.0
 
-cvd1 = cvdProxy(open[1],high[1],low[1],close[1],volume[1])
-cvd2 = cvdProxy(open[2],high[2],low[2],close[2],volume[2])
+cvd1 = cvdProxy(open[1], high[1], low[1], close[1], volume[1])
+cvd2 = cvdProxy(open[2], high[2], low[2], close[2], volume[2])
 
 // ── BEAR TRAP DETECTION ─────────────────────────────────────────────
-// All sweep logic uses confirmed bars [1]/[2]. Signal fires at bar close only.
 validPivot    = not na(lastPivotLow) and bar_index > lastPivotBar + 1
 wickSweep     = validPivot and low[1]   < lastPivotLow and close[1] > lastPivotLow
 closeSweep    = validPivot and close[2] < lastPivotLow and close[1] > lastPivotLow
 bearTrapSetup = (i_allowWick ? wickSweep : closeSweep) and close > open and close > lastPivotLow
 
-// ── SIGNAL SCORE ────────────────────────────────────────────────────
 ema200Pass = close > ema200
 htfPass    = not i_htfFilter    or htfBullish
 ema200Gate = not i_ema200Filter or ema200Pass
 
-// Split into two lines so each is a simple flat expression — no multi-line inside ()
 scoreRaw = (htfBullish ? 1 : 0) + (ema200Pass ? 1 : 0) + (volume[1] > volAvg[1] * i_volMult ? 1 : 0) + (atr > atr[1] ? 1 : 0) + (low[1] < low[2] and cvd1 > cvd2 ? 1 : 0)
 score    = math.max(0, scoreRaw - (i_funding > 0.001 ? 1 : 0))
 
-bearTrapSignal = bearTrapSetup and score >= i_minScore and htfPass and ema200Gate
+// ── PRE-ENTRY FILTERS ───────────────────────────────────────────────
+prospSl   = low[1] - atr * i_atrSlBuf
+prospRisk = close - prospSl
+prospTp1  = not na(lastPivotHigh) and lastPivotHigh > close and lastPivotHigh < close + prospRisk * 2.0 ? lastPivotHigh : close + prospRisk * i_tp1R
+atrFilter = prospRisk > 0 and prospRisk <= i_maxSlAtr * atr
+rrFilter  = prospRisk > 0 and (prospTp1 - close) / prospRisk >= i_minRR
+
+bearTrapSignal = bearTrapSetup and score >= i_minScore and htfPass and ema200Gate and atrFilter and rrFilter
 
 // ── TRADE STATE MACHINE ─────────────────────────────────────────────
-var float entryPrice = na
-var float stopLevel  = na
-var float tp1Level   = na
-var float tp2Level   = na
-var float tp3Level   = na
-var bool  inTrade    = false
-var int   lastSigBar = na
-var string sigStatus = "WAIT"
+var float  entryPrice   = na
+var float  stopLevel    = na
+var float  tp1Level     = na
+var float  tp2Level     = na
+var float  tp3Level     = na
+var bool   inTrade      = false
+var int    lastSigBar   = na
+var string sigStatus    = "WAIT"
+var bool   tp1Fired     = false
+var bool   tp2Fired     = false
+var int    tradeBarNum  = 0
+
+// One-shot per-bar signals (cleared each bar, set inside state machine)
+var bool   tp1Signal    = false
+var bool   tp2Signal    = false
+var bool   exitSignal   = false
+
+tp1Signal := false
+tp2Signal := false
+exitSignal := false
 
 if bearTrapSignal and not inTrade
-    entryPrice := close
-    stopLevel  := low[1] - atr * i_atrSlBuf
-    float risk = entryPrice - stopLevel
-    tp1Level   := not na(lastPivotHigh) and lastPivotHigh > entryPrice and lastPivotHigh < entryPrice + risk * 2.0 ? lastPivotHigh : entryPrice + risk * i_tp1R
-    tp2Level   := not na(lastPivotHigh) and lastPivotHigh > tp1Level ? lastPivotHigh : entryPrice + risk * i_tp2R
-    tp3Level   := entryPrice + risk * 3.0
-    inTrade    := true
-    lastSigBar := bar_index
-    sigStatus  := "BUY"
+    entryPrice  := close
+    stopLevel   := low[1] - atr * i_atrSlBuf
+    float risk   = entryPrice - stopLevel
+    tp1Level    := not na(lastPivotHigh) and lastPivotHigh > entryPrice and lastPivotHigh < entryPrice + risk * 2.0 ? lastPivotHigh : entryPrice + risk * i_tp1R
+    tp2Level    := not na(lastPivotHigh) and lastPivotHigh > tp1Level ? lastPivotHigh : entryPrice + risk * i_tp2R
+    tp3Level    := entryPrice + risk * 3.0
+    inTrade     := true
+    lastSigBar  := bar_index
+    sigStatus   := "BUY"
+    tp1Fired    := false
+    tp2Fired    := false
+    tradeBarNum := 0
 
-stopHit = inTrade and not na(stopLevel) and low  <= stopLevel
-tp1Hit  = inTrade and not na(tp1Level)  and high >= tp1Level
-tp2Hit  = inTrade and not na(tp2Level)  and high >= tp2Level
-tp3Hit  = inTrade and not na(tp3Level)  and high >= tp3Level
+if inTrade
+    tradeBarNum += 1
 
-if inTrade and not bearTrapSignal
-    sigStatus := "IN TRADE"
+    // TP1 first fire — move stop to breakeven
+    if not tp1Fired and not na(tp1Level) and high >= tp1Level
+        tp1Fired  := true
+        tp1Signal := true
+        stopLevel := entryPrice
 
-if stopHit or tp3Hit
-    inTrade    := false
-    sigStatus  := "EXIT"
-    entryPrice := na
-    stopLevel  := na
-    tp1Level   := na
-    tp2Level   := na
-    tp3Level   := na
+    // TP2 first fire — activate trailing stop
+    if tp1Fired and not tp2Fired and not na(tp2Level) and high >= tp2Level
+        tp2Fired  := true
+        tp2Signal := true
+
+    // Trailing stop: ratchet under higher lows after TP2
+    if tp2Fired
+        float trail = low[1] - atr * i_atrSlBuf
+        if trail > stopLevel
+            stopLevel := trail
+
+    // Hard stop — no exceptions, checked every bar
+    if not na(stopLevel) and low <= stopLevel
+        exitSignal  := true
+        inTrade     := false
+        sigStatus   := "EXIT"
+        entryPrice  := na
+        stopLevel   := na
+        tp1Level    := na
+        tp2Level    := na
+        tp3Level    := na
+        tp1Fired    := false
+        tp2Fired    := false
+        tradeBarNum := 0
+    // TP3 full exit
+    else if not na(tp3Level) and high >= tp3Level
+        exitSignal  := true
+        inTrade     := false
+        sigStatus   := "EXIT"
+        entryPrice  := na
+        stopLevel   := na
+        tp1Level    := na
+        tp2Level    := na
+        tp3Level    := na
+        tp1Fired    := false
+        tp2Fired    := false
+        tradeBarNum := 0
+    // Max bars timeout
+    else if tradeBarNum >= i_maxBarsInTrade
+        exitSignal  := true
+        inTrade     := false
+        sigStatus   := "EXIT"
+        entryPrice  := na
+        stopLevel   := na
+        tp1Level    := na
+        tp2Level    := na
+        tp3Level    := na
+        tp1Fired    := false
+        tp2Fired    := false
+        tradeBarNum := 0
+    else
+        sigStatus := "IN TRADE"
 
 // ── DERIVED VALUES ──────────────────────────────────────────────────
-riskAmt  = inTrade ? math.abs(entryPrice - stopLevel) : na
-rrRatio  = not na(riskAmt) and riskAmt > 0 ? math.abs(tp2Level - entryPrice) / riskAmt : na
-posSize  = not na(riskAmt) and riskAmt > 0 ? i_acctSize * (i_riskPct / 100.0) / riskAmt : na
-liqEst   = inTrade ? entryPrice * (1.0 - 0.9 / i_leverage) : na
+riskAmt = inTrade ? math.abs(entryPrice - stopLevel) : na
+effRisk = math.min(i_riskPct, i_maxLossPct)
+rrRatio = not na(riskAmt) and riskAmt > 0 ? math.abs(tp2Level - entryPrice) / riskAmt : na
+posSize = not na(riskAmt) and riskAmt > 0 ? i_acctSize * (effRisk / 100.0) / riskAmt : na
+liqEst  = inTrade ? entryPrice * (1.0 - 0.9 / i_leverage) : na
 
 utcH      = hour(time, "UTC")
 utcM      = minute(time, "UTC")
@@ -140,7 +207,6 @@ if not na(rawPivotHigh)
     label.new(bar_index - i_pivotRight, rawPivotHigh, ".",
               style=label.style_label_down, color=color.new(color.teal, 40), textcolor=color.teal, size=size.tiny)
 
-// Trade level lines — delete old set on each new signal, redraw 60 bars forward
 var line ln_entry = na
 var line ln_sl    = na
 var line ln_tp1   = na
@@ -165,7 +231,6 @@ if bearTrapSignal and not inTrade[1]
     ln_tp2   := line.new(bar_index, tp2Level,   e, tp2Level,   color=color.green, width=2, style=line.style_dashed)
     ln_tp3   := line.new(bar_index, tp3Level,   e, tp3Level,   color=color.teal,  width=1, style=line.style_dotted)
 
-// Session open labels — each body must be on its own indented line
 if i_showSess
     if utcH == 0 and utcM == 0
         label.new(bar_index, high, "Asia",   style=label.style_label_down, color=color.new(color.blue,   65), textcolor=color.white, size=size.tiny)
@@ -178,10 +243,10 @@ var label lbl_weekend = na
 if i_showWeekend and isWeekend and barstate.islast
     label.delete(lbl_weekend)
     lbl_weekend := label.new(bar_index, high, "WEEKEND LOW LIQ",
-              style=label.style_label_down, color=color.new(color.red, 25), textcolor=color.white, size=size.small)
+                  style=label.style_label_down, color=color.new(color.red, 25), textcolor=color.white, size=size.small)
 
 // ── DASHBOARD ───────────────────────────────────────────────────────
-var table dash = table.new(position.top_right, 2, 20,
+var table dash = table.new(position.top_right, 2, 23,
      bgcolor=color.new(color.black, 25), border_color=color.new(color.gray, 50),
      border_width=1, frame_color=color.new(color.gray, 30), frame_width=1)
 
@@ -200,56 +265,60 @@ if barstate.islast
     W  = color.white
     S  = color.silver
 
-    f_cell(0, 0, "BEAR TRAP TRADE PRO",  H,  color.aqua)
-    f_cell(1, 0, "v1.0",                 H,  S)
-    f_cell(0, 1, "Ticker",               R,  S)
-    f_cell(1, 1, syminfo.ticker,         R,  W)
-    f_cell(0, 2, "Timeframe",            R,  W)
-    f_cell(1, 2, timeframe.period,       R,  W)
-    f_cell(0, 3, "Status",               R,  S)
-    f_cell(1, 3, sigStatus,              sBg(sigStatus), W)
-    f_cell(0, 4, "Score",                R,  S)
-    f_cell(1, 4, str.tostring(score) + "/5", score >= i_minScore ? OK : FL, W)
-    f_cell(0, 5, "Entry",                R,  S)
-    f_cell(1, 5, inTrade ? str.tostring(entryPrice, format.mintick) : "--", R, W)
-    f_cell(0, 6, "Stop",                 R,  S)
-    f_cell(1, 6, inTrade ? str.tostring(stopLevel,  format.mintick) : "--", R, color.red)
-    f_cell(0, 7, "TP1 (40%)",            R,  S)
-    f_cell(1, 7, inTrade ? str.tostring(tp1Level,   format.mintick) : "--", R, color.lime)
-    f_cell(0, 8, "TP2 (40%)",            R,  S)
-    f_cell(1, 8, inTrade ? str.tostring(tp2Level,   format.mintick) : "--", R, color.lime)
-    f_cell(0, 9, "TP3 (20%)",            R,  S)
-    f_cell(1, 9, inTrade ? str.tostring(tp3Level,   format.mintick) : "--", R, color.teal)
-    f_cell(0,10, "R/R",                  R,  S)
-    f_cell(1,10, not na(rrRatio) ? str.tostring(rrRatio, "#.##") + ":1" : "--", R, W)
-    f_cell(0,11, "Last Signal",          R,  S)
-    f_cell(1,11, not na(lastSigBar) ? str.tostring(bar_index - lastSigBar) + " bars" : "--", R, W)
-    f_cell(0,12, "HTF Trend",            R,  S)
-    f_cell(1,12, htfBullish  ? "PASS" : "FAIL", htfBullish  ? OK : FL, W)
-    f_cell(0,13, "EMA 200",              R,  S)
-    f_cell(1,13, ema200Pass  ? "PASS" : "FAIL", ema200Pass  ? OK : FL, W)
-    f_cell(0,14, "Weekend",              R,  S)
-    f_cell(1,14, isWeekend   ? "ON"  : "OFF",   isWeekend   ? WN : R,  W)
-    f_cell(0,15, "Funding Rate",         R,  S)
-    f_cell(1,15, str.tostring(i_funding * 100.0, "#.###") + "%", i_funding > 0.001 ? WN : R, W)
-    f_cell(0,16, "Liq. Estimate",        R,  S)
-    f_cell(1,16, inTrade ? str.tostring(liqEst, format.mintick) : "--", R, color.orange)
-    f_cell(0,17, "Pos. Size",            R,  S)
-    f_cell(1,17, not na(posSize) ? str.tostring(posSize, "#.####") : "--", R, W)
-    f_cell(0,18, "ATR",                  R,  S)
-    f_cell(1,18, str.tostring(atr, format.mintick), R, W)
-    f_cell(0,19, "Bot Status",           R,  S)
-    f_cell(1,19, "CONNECTED",            OK, W)
+    f_cell(0,  0, "BEAR TRAP TRADE PRO",  H, color.aqua)
+    f_cell(1,  0, "v1.1",                 H, S)
+    f_cell(0,  1, "Ticker",               R, S)
+    f_cell(1,  1, syminfo.ticker,         R, W)
+    f_cell(0,  2, "Timeframe",            R, W)
+    f_cell(1,  2, timeframe.period,       R, W)
+    f_cell(0,  3, "Status",               R, S)
+    f_cell(1,  3, sigStatus,              sBg(sigStatus), W)
+    f_cell(0,  4, "Score",                R, S)
+    f_cell(1,  4, str.tostring(score) + "/5", score >= i_minScore ? OK : FL, W)
+    f_cell(0,  5, "Entry",                R, S)
+    f_cell(1,  5, inTrade ? str.tostring(entryPrice, format.mintick) : "--", R, W)
+    f_cell(0,  6, "Stop",                 R, S)
+    f_cell(1,  6, inTrade ? str.tostring(stopLevel,  format.mintick) : "--", R, color.red)
+    f_cell(0,  7, "TP1 (40%)",            R, S)
+    f_cell(1,  7, inTrade ? str.tostring(tp1Level,   format.mintick) : "--", R, color.lime)
+    f_cell(0,  8, "TP2 (40%)",            R, S)
+    f_cell(1,  8, inTrade ? str.tostring(tp2Level,   format.mintick) : "--", R, color.lime)
+    f_cell(0,  9, "TP3 (20%)",            R, S)
+    f_cell(1,  9, inTrade ? str.tostring(tp3Level,   format.mintick) : "--", R, color.teal)
+    f_cell(0, 10, "R:R",                  R, S)
+    f_cell(1, 10, not na(rrRatio) ? str.tostring(rrRatio, "#.##") + ":1" : "--", R, W)
+    f_cell(0, 11, "Bars",                 R, S)
+    f_cell(1, 11, inTrade ? str.tostring(tradeBarNum) + "/" + str.tostring(i_maxBarsInTrade) : "--", tradeBarNum >= i_maxBarsInTrade - 5 ? WN : R, W)
+    f_cell(0, 12, "Trailing",             R, S)
+    f_cell(1, 12, inTrade ? (tp2Fired ? "ACTIVE" : "OFF") : "--", tp2Fired ? OK : R, W)
+    f_cell(0, 13, "HTF Trend",            R, S)
+    f_cell(1, 13, htfBullish  ? "PASS" : "FAIL", htfBullish  ? OK : FL, W)
+    f_cell(0, 14, "EMA 200",              R, S)
+    f_cell(1, 14, ema200Pass  ? "PASS" : "FAIL", ema200Pass  ? OK : FL, W)
+    f_cell(0, 15, "ATR Filter",           R, S)
+    f_cell(1, 15, atrFilter   ? "PASS" : "FAIL", atrFilter   ? OK : FL, W)
+    f_cell(0, 16, "R:R Filter",           R, S)
+    f_cell(1, 16, rrFilter    ? "PASS" : "FAIL", rrFilter    ? OK : FL, W)
+    f_cell(0, 17, "Weekend",              R, S)
+    f_cell(1, 17, isWeekend   ? "ON"   : "OFF", isWeekend   ? WN : R, W)
+    f_cell(0, 18, "Funding Rate",         R, S)
+    f_cell(1, 18, str.tostring(i_funding * 100.0, "#.###") + "%", i_funding > 0.001 ? WN : R, W)
+    f_cell(0, 19, "Liq. Estimate",        R, S)
+    f_cell(1, 19, inTrade ? str.tostring(liqEst, format.mintick) : "--", R, color.orange)
+    f_cell(0, 20, "Pos. Size",            R, S)
+    f_cell(1, 20, not na(posSize) ? str.tostring(posSize, "#.####") : "--", R, W)
+    f_cell(0, 21, "ATR",                  R, S)
+    f_cell(1, 21, str.tostring(atr, format.mintick), R, W)
+    f_cell(0, 22, "Bot Status",           R, S)
+    f_cell(1, 22, "CONNECTED",            OK, W)
 
 // ── ALERT CONDITIONS ────────────────────────────────────────────────
 alertcondition(bearTrapSignal, "BUY_SIGNAL", "Bear Trap: BUY SIGNAL")
-alertcondition(tp1Hit,         "TP1_HIT",    "Bear Trap: TP1 HIT")
-alertcondition(tp2Hit,         "TP2_HIT",    "Bear Trap: TP2 HIT")
-alertcondition(stopHit,        "EXIT_TRADE", "Bear Trap: EXIT (stop)")
-alertcondition(tp3Hit,         "EXIT_TRADE", "Bear Trap: EXIT (TP3)")
+alertcondition(tp1Signal,      "TP1_HIT",    "Bear Trap: TP1 HIT")
+alertcondition(tp2Signal,      "TP2_HIT",    "Bear Trap: TP2 HIT")
+alertcondition(exitSignal,     "EXIT_TRADE", "Bear Trap: EXIT")
 
 // ── WEBHOOK PAYLOAD ─────────────────────────────────────────────────
-// Each field is built as a separate assignment to avoid multi-line string concat issues
 alertBody(sig) =>
     string rrStr = not na(rrRatio)   ? str.tostring(rrRatio,   "#.##")         : "0"
     string slStr = not na(stopLevel) ? str.tostring(stopLevel, format.mintick) : "0"
@@ -267,6 +336,7 @@ alertBody(sig) =>
     j := j + '"tp3":"'         + t3Str + '",'
     j := j + '"score":"'       + str.tostring(score)                 + '",'
     j := j + '"risk_reward":"' + rrStr                               + '",'
+    j := j + '"trailing":"'    + (tp2Fired   ? "true" : "false")    + '",'
     j := j + '"htf_trend":"'   + (htfBullish ? "BULL" : "BEAR")     + '",'
     j := j + '"ema_filter":"'  + (ema200Pass ? "PASS" : "FAIL")     + '",'
     j := j + '"order_type":"'  + i_orderType                        + '",'
@@ -275,11 +345,9 @@ alertBody(sig) =>
 
 if bearTrapSignal
     alert(alertBody("BUY_SIGNAL"), alert.freq_once_per_bar_close)
-if tp1Hit
+if tp1Signal
     alert(alertBody("TP1_HIT"),    alert.freq_once_per_bar_close)
-if tp2Hit
+if tp2Signal
     alert(alertBody("TP2_HIT"),    alert.freq_once_per_bar_close)
-if stopHit
-    alert(alertBody("EXIT_TRADE"), alert.freq_once_per_bar_close)
-if tp3Hit
+if exitSignal
     alert(alertBody("EXIT_TRADE"), alert.freq_once_per_bar_close)

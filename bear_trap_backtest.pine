@@ -1,20 +1,22 @@
 //@version=5
 // ═══════════════════════════════════════════════════════════════════
-//  Bear Trap Trade Pro — Backtest
-//  Load this file in TradingView → Pine Editor → Add to chart.
-//  Open the "Strategy Tester" tab to see performance metrics.
-//  Change inputs (Min Score, HTF Filter, EMA 200 Filter, etc.) and
-//  the Strategy Tester updates instantly — no re-add required.
+//  Bear Trap Trade Pro — Backtest Strategy  v1.1
+//  Load in TradingView Pine Editor → Add to chart → Strategy Tester tab.
 //
-//  Partial exit model:
-//    TP1 (1R) → close 40 % of position, stop moves to breakeven
-//    TP2 (2R) → close 40 % of original (~67 % of remaining)
-//    TP3 (3R) → close remaining 20 %
-//    Stop     → close 100 % of remaining at stop level
+//  Target metrics before going live:
+//    Trades       >= 100
+//    Win rate     >= 55 %
+//    Profit factor >= 1.5
+//    Max drawdown  <= 10 %
+//    Avg win > Avg loss
 //
-//  Entry fills at the OPEN of the bar AFTER the signal bar
-//  (default Pine Script strategy behaviour). This is realistic —
-//  you see the signal at bar close and your order fills next open.
+//  Partial exit model (fills at next bar open by default):
+//    TP1 (1R) — close 40 %, stop moves to breakeven
+//    TP2 (2R) — close 40 % of original (~67 % of remaining 60 %)
+//    TP3 (3R) — close remaining 20 %
+//    Stop     — always hard exit, no exceptions
+//    Max bars — time-stop if trade lingers past i_maxBarsInTrade
+//    Max loss — emergency close if unrealised loss > 1.5 x cap (gap protection)
 // ═══════════════════════════════════════════════════════════════════
 strategy("Bear Trap Trade Pro — Backtest", overlay=true,
          initial_capital    = 10000,
@@ -28,21 +30,25 @@ strategy("Bear Trap Trade Pro — Backtest", overlay=true,
          max_lines_count    = 500)
 
 // ── INPUTS ────────────────────────────────────────────────────────
-i_pivotLeft    = input.int(10,    "Pivot Left",        minval=2,  maxval=50,  group="Bear Trap")
-i_pivotRight   = input.int(10,    "Pivot Right",       minval=2,  maxval=50,  group="Bear Trap")
-i_allowWick    = input.bool(true, "Allow Wick Sweep",                          group="Bear Trap")
-i_minScore     = input.int(3,     "Min Score (1-5)",   minval=1,  maxval=5,   group="Bear Trap")
-i_htfFilter    = input.bool(true,       "HTF Filter",                          group="Filters")
-i_htfTf        = input.timeframe("240", "HTF Timeframe",                       group="Filters")
-i_ema200Filter = input.bool(true,       "EMA 200 Filter",                      group="Filters")
-i_atrLen       = input.int(14,    "ATR Length",         minval=1,              group="Levels")
-i_atrSlBuf     = input.float(0.5, "ATR SL Buffer",      minval=0.1, step=0.1, group="Levels")
-i_tp1R         = input.float(1.0, "TP1 R-Multiple",     minval=0.5, step=0.1, group="Levels")
-i_tp2R         = input.float(2.0, "TP2 R-Multiple",     minval=1.0, step=0.1, group="Levels")
-i_volLen       = input.int(20,    "Vol Avg Length",     minval=5,              group="Confluence")
-i_volMult      = input.float(1.5, "Vol Spike Mult",     minval=1.0, step=0.1, group="Confluence")
-i_riskPct      = input.float(2.0, "Risk % per trade",   minval=0.1, maxval=10, group="Risk")
-i_funding      = input.float(0.0, "Funding Rate %",     step=0.001,            group="Risk")
+i_pivotLeft      = input.int(10,     "Pivot Left",           minval=2,  maxval=50,  group="Bear Trap")
+i_pivotRight     = input.int(10,     "Pivot Right",          minval=2,  maxval=50,  group="Bear Trap")
+i_allowWick      = input.bool(true,  "Allow Wick Sweep",                             group="Bear Trap")
+i_minScore       = input.int(2,      "Min Score (1-5)",      minval=1,  maxval=5,   group="Bear Trap")
+i_htfFilter      = input.bool(false,       "HTF Filter",                             group="Filters")
+i_htfTf          = input.timeframe("240",  "HTF Timeframe",                          group="Filters")
+i_ema200Filter   = input.bool(true,        "EMA 200 Filter",                         group="Filters")
+i_minRR          = input.float(1.5,  "Min R:R",              minval=0.5, step=0.1,  group="Filters")
+i_maxSlAtr       = input.float(2.0,  "Max Stop (ATR x)",     minval=0.5, step=0.1,  group="Filters")
+i_atrLen         = input.int(14,     "ATR Length",           minval=1,               group="Levels")
+i_atrSlBuf       = input.float(0.3,  "ATR SL Buffer",        minval=0.1, step=0.1,  group="Levels")
+i_tp1R           = input.float(1.0,  "TP1 R-Multiple",       minval=0.5, step=0.1,  group="Levels")
+i_tp2R           = input.float(2.0,  "TP2 R-Multiple",       minval=1.0, step=0.1,  group="Levels")
+i_maxBarsInTrade = input.int(50,     "Max Bars in Trade",    minval=5,  maxval=200,  group="Risk")
+i_riskPct        = input.float(2.0,  "Risk % per trade",     minval=0.1, maxval=10,  group="Risk")
+i_maxLossPct     = input.float(1.5,  "Max Loss Cap %",       minval=0.1, maxval=10,  group="Risk")
+i_volLen         = input.int(20,     "Vol Avg Length",       minval=5,               group="Confluence")
+i_volMult        = input.float(1.5,  "Vol Spike Mult",       minval=1.0, step=0.1,  group="Confluence")
+i_funding        = input.float(0.0,  "Funding Rate %",       step=0.001,             group="Confluence")
 
 // ── CORE INDICATORS ───────────────────────────────────────────────
 atr    = ta.atr(i_atrLen)
@@ -87,18 +93,24 @@ ema200Gate = not i_ema200Filter or ema200Pass
 scoreRaw = (htfBullish ? 1 : 0) + (ema200Pass ? 1 : 0) + (volume[1] > volAvg[1] * i_volMult ? 1 : 0) + (atr > atr[1] ? 1 : 0) + (low[1] < low[2] and cvd1 > cvd2 ? 1 : 0)
 score    = math.max(0, scoreRaw - (i_funding > 0.001 ? 1 : 0))
 
-bearTrapSignal = bearTrapSetup and score >= i_minScore and htfPass and ema200Gate
+// Pre-entry filters
+prospSl   = low[1] - atr * i_atrSlBuf
+prospRisk = close - prospSl
+prospTp1  = not na(lastPivotHigh) and lastPivotHigh > close and lastPivotHigh < close + prospRisk * 2.0 ? lastPivotHigh : close + prospRisk * i_tp1R
+atrFilter = prospRisk > 0 and prospRisk <= i_maxSlAtr * atr
+rrFilter  = prospRisk > 0 and (prospTp1 - close) / prospRisk >= i_minRR
+
+bearTrapSignal = bearTrapSetup and score >= i_minScore and htfPass and ema200Gate and atrFilter and rrFilter
 
 // ── TRADE EXECUTION ───────────────────────────────────────────────
-// Level state is set on the signal bar and used from the next bar onward.
-// s_sl is mutable: moves to breakeven after TP1.
-var float s_entry  = na
-var float s_sl     = na
-var float s_tp1    = na
-var float s_tp2    = na
-var float s_tp3    = na
-var bool  s_t1Done = false
-var bool  s_t2Done = false
+var float s_entry   = na
+var float s_sl      = na
+var float s_tp1     = na
+var float s_tp2     = na
+var float s_tp3     = na
+var bool  s_t1Done  = false
+var bool  s_t2Done  = false
+var int   s_barNum  = 0
 
 inTrade = strategy.position_size > 0
 
@@ -106,26 +118,38 @@ if bearTrapSignal and not inTrade
     s_entry  := close
     s_sl     := low[1] - atr * i_atrSlBuf
     float risk = s_entry - s_sl
-    s_tp1    := s_entry + risk * i_tp1R
-    s_tp2    := s_entry + risk * i_tp2R
+    s_tp1    := not na(lastPivotHigh) and lastPivotHigh > s_entry and lastPivotHigh < s_entry + risk * 2.0 ? lastPivotHigh : s_entry + risk * i_tp1R
+    s_tp2    := not na(lastPivotHigh) and lastPivotHigh > s_tp1 ? lastPivotHigh : s_entry + risk * i_tp2R
     s_tp3    := s_entry + risk * 3.0
     s_t1Done := false
     s_t2Done := false
-    float qty = risk > 0 ? (strategy.equity * i_riskPct / 100.0) / risk : 1.0
+    s_barNum := 0
+    float effRisk = math.min(i_riskPct, i_maxLossPct)
+    float qty     = risk > 0 ? (strategy.equity * effRisk / 100.0) / risk : 1.0
     strategy.entry("Long", strategy.long, qty=qty)
 
 if inTrade
+    s_barNum += 1
+
     // TP1 — close 40 %, move stop to breakeven
-    if not s_t1Done and high >= s_tp1
+    if not s_t1Done and not na(s_tp1) and high >= s_tp1
         strategy.close("Long", qty_percent=40, comment="TP1")
         s_sl     := s_entry
         s_t1Done := true
-    // TP2 — close 40 % of original (67 % of remaining 60 %)
-    if s_t1Done and not s_t2Done and high >= s_tp2
+
+    // TP2 — close 40 % of original (~67 % of remaining 60 %)
+    if s_t1Done and not s_t2Done and not na(s_tp2) and high >= s_tp2
         strategy.close("Long", qty_percent=67, comment="TP2")
         s_t2Done := true
-    // Stop — close all; else-if prevents double-close if low=stop & high=TP3
-    if low <= s_sl
+
+    // Trailing stop: ratchet under higher lows after TP2
+    if s_t2Done and not na(low[1])
+        float trail = low[1] - atr * i_atrSlBuf
+        if trail > s_sl
+            s_sl := trail
+
+    // Hard stop — no exceptions
+    if not na(s_sl) and low <= s_sl
         strategy.close("Long", comment="Stop")
         s_entry  := na
         s_sl     := na
@@ -134,7 +158,9 @@ if inTrade
         s_tp3    := na
         s_t1Done := false
         s_t2Done := false
-    else if high >= s_tp3
+        s_barNum := 0
+    // TP3 — close remainder
+    else if not na(s_tp3) and high >= s_tp3
         strategy.close("Long", comment="TP3")
         s_entry  := na
         s_sl     := na
@@ -143,6 +169,29 @@ if inTrade
         s_tp3    := na
         s_t1Done := false
         s_t2Done := false
+        s_barNum := 0
+    // Max bars timeout
+    else if s_barNum >= i_maxBarsInTrade
+        strategy.close("Long", comment="Max Bars")
+        s_entry  := na
+        s_sl     := na
+        s_tp1    := na
+        s_tp2    := na
+        s_tp3    := na
+        s_t1Done := false
+        s_t2Done := false
+        s_barNum := 0
+    // Emergency max loss (gap protection: 1.5 x cap)
+    else if strategy.openprofit < -(strategy.equity * i_maxLossPct * 1.5 / 100.0)
+        strategy.close("Long", comment="Max Loss")
+        s_entry  := na
+        s_sl     := na
+        s_tp1    := na
+        s_tp2    := na
+        s_tp3    := na
+        s_t1Done := false
+        s_t2Done := false
+        s_barNum := 0
 
 // ── OVERLAYS ──────────────────────────────────────────────────────
 plot(ema200,       "EMA 200",   color=color.new(color.yellow, 0), linewidth=2)
@@ -152,7 +201,6 @@ if bearTrapSignal
     label.new(bar_index, low[1] * 0.9995, "TRAP " + str.tostring(score) + "/5",
               style=label.style_label_up, color=color.new(color.green, 15), textcolor=color.white, size=size.small)
 
-// Level lines on each new trade
 var line ln_entry = na
 var line ln_sl    = na
 var line ln_tp1   = na
@@ -176,3 +224,6 @@ if bearTrapSignal and not inTrade
     ln_tp1   := line.new(bar_index, s_tp1,   e, s_tp1,   color=color.lime,  width=1, style=line.style_dashed)
     ln_tp2   := line.new(bar_index, s_tp2,   e, s_tp2,   color=color.green, width=2, style=line.style_dashed)
     ln_tp3   := line.new(bar_index, s_tp3,   e, s_tp3,   color=color.teal,  width=1, style=line.style_dotted)
+
+// ── ALERT CONDITIONS ──────────────────────────────────────────────
+alertcondition(bearTrapSignal, "BUY_SIGNAL", "Bear Trap: BUY SIGNAL")
