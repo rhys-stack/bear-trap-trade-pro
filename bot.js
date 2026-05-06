@@ -143,9 +143,12 @@ function verifySecret(req) {
 }
 
 function hashAlert(payload) {
+    // If no timestamp (e.g. SSQ signals), bucket to the nearest minute so
+    // duplicate fires within the same bar are still caught.
+    const ts = payload.timestamp || Math.floor(Date.now() / 60000) * 60000;
     return crypto
         .createHash('sha256')
-        .update(JSON.stringify({ s: payload.signal, t: payload.ticker, ts: payload.timestamp }))
+        .update(JSON.stringify({ s: payload.signal, t: payload.ticker, ts }))
         .digest('hex');
 }
 
@@ -479,6 +482,142 @@ async function handleExitTrade(payload) {
 }
 
 // =====================================================================
+// SSQ STRATEGY HANDLERS
+// =====================================================================
+
+async function handleSSQEntry(payload, direction) {
+    const { ticker } = payload;
+
+    if (activeTrades[ticker]) {
+        log('INFO', `[SSQ] Already in trade for ${ticker} — skipped`);
+        return { status: 'skipped', reason: 'already_in_trade' };
+    }
+
+    checkPeriodReset();
+
+    if (dailyPnL <= -MAX_DAILY_LOSS) {
+        log('WARN', `[SSQ] Daily loss limit hit (${dailyPnL.toFixed(2)}%) — skipped`);
+        return { status: 'skipped', reason: 'daily_loss_limit' };
+    }
+    if (weeklyPnL <= -MAX_WEEKLY_LOSS) {
+        log('WARN', `[SSQ] Weekly loss limit hit (${weeklyPnL.toFixed(2)}%) — skipped`);
+        return { status: 'skipped', reason: 'weekly_loss_limit' };
+    }
+    if (correlatedOpenCount(ticker) >= 2) {
+        log('WARN', `[SSQ] Correlation limit for ${ticker} — skipped`);
+        return { status: 'skipped', reason: 'correlation_limit' };
+    }
+
+    const entryPrice = parseFloat(payload.entry) || 0;
+    if (!entryPrice) {
+        log('WARN', '[SSQ] No entry price in payload — add entry:{{close}} to your TradingView alert message');
+    }
+
+    let accountBalance = LIVE_TRADING ? 0 : parseFloat(process.env.PAPER_BALANCE || '10000');
+    if (LIVE_TRADING) {
+        try {
+            accountBalance = await getAccountBalance();
+            log('INFO', `[LIVE] Account balance: ${accountBalance} USDT`);
+        } catch (err) {
+            log('ERROR', `[LIVE] Balance fetch failed: ${err.message}`);
+            return { status: 'error', reason: err.message };
+        }
+    }
+
+    // Size the position so the notional value = RISK_PER_TRADE% of account.
+    // (No stop distance provided by SSQ, so flat-% notional sizing is used.)
+    const posValue = accountBalance * (RISK_PER_TRADE / 100);
+    let posSize = entryPrice > 0 ? posValue / entryPrice : posValue;
+    if (reducedSizing) {
+        posSize *= 0.5;
+        log('WARN', 'Reduced sizing active (2+ consecutive losses)');
+    }
+
+    const trade = {
+        id:            `${ticker}_SSQ_${Date.now()}`,
+        symbol:        ticker,
+        strategy:      'SSQ',
+        direction,
+        entryPrice,
+        posSize,
+        remainingSize: posSize,
+        openTime:      new Date().toISOString(),
+        status:        'OPEN',
+        realizedPnL:   0,
+        mode:          LIVE_TRADING ? 'LIVE' : 'PAPER',
+        liveOrderIds:  {},
+    };
+
+    if (LIVE_TRADING) {
+        try {
+            const side = direction === 'long' ? 'buy' : 'sell';
+            const order = await placeFuturesOrder({ symbol: ticker, side, orderType: 'Market', size: posSize });
+            trade.liveOrderIds.entry = order?.data?.orderId;
+            log('INFO', `[LIVE][SSQ] ${direction.toUpperCase()} order: ${trade.liveOrderIds.entry}`);
+        } catch (err) {
+            log('ERROR', `[LIVE][SSQ] Order failed: ${err.message}`);
+            return { status: 'error', reason: err.message };
+        }
+    } else {
+        log('INFO', `[PAPER][SSQ] ${direction.toUpperCase()} ${ticker} @ ${entryPrice || 'unknown'} | Size: ${posSize.toFixed(4)}`);
+    }
+
+    activeTrades[ticker] = trade;
+    saveState();
+    await sendEmail('ssq_entry', trade);
+    return { status: 'ok', trade };
+}
+
+async function handleSSQExit(payload) {
+    const trade = activeTrades[payload.ticker];
+    if (!trade) return { status: 'skipped', reason: 'no_active_trade' };
+
+    const exitPrice = parseFloat(payload.entry) || 0;
+
+    let finalPnl = 0;
+    if (exitPrice > 0 && trade.entryPrice > 0) {
+        const diff = trade.direction === 'long'
+            ? exitPrice - trade.entryPrice
+            : trade.entryPrice - exitPrice;
+        finalPnl = diff * trade.remainingSize;
+
+        const pnlPct = (finalPnl / (trade.remainingSize * trade.entryPrice)) * 100;
+        dailyPnL  += pnlPct;
+        weeklyPnL += pnlPct;
+    }
+
+    trade.realizedPnL += finalPnl;
+    trade.status    = 'CLOSED';
+    trade.closeTime = new Date().toISOString();
+    trade.exitPrice = exitPrice;
+
+    if (trade.realizedPnL > 0) {
+        consecutiveWins++;
+        consecutiveLosses = 0;
+        if (reducedSizing) {
+            reducedSizing = false;
+            log('INFO', '[RISK] Normal sizing restored after win');
+        }
+    } else {
+        consecutiveLosses++;
+        consecutiveWins = 0;
+        if (consecutiveLosses >= 2 && !reducedSizing) {
+            reducedSizing = true;
+            log('WARN', '[RISK] Reduced sizing activated (2 consecutive losses)');
+        }
+    }
+
+    log('INFO', `[SSQ][EXIT] ${trade.symbol} ${trade.direction} closed @ ${exitPrice} | PnL: ${trade.realizedPnL.toFixed(2)} USDT`);
+
+    tradeHistory.push({ ...trade });
+    delete activeTrades[trade.symbol];
+    saveState();
+    saveHistory();
+    await sendEmail('ssq_exit', trade);
+    return { status: 'ok', trade };
+}
+
+// =====================================================================
 // EMAIL
 // =====================================================================
 
@@ -584,6 +723,37 @@ ${MODE_BADGE}
 <tr><td>Closed</td><td>${trade.closeTime}</td></tr>
 <tr><td>Consec. Wins</td><td>${consecutiveWins}</td></tr>
 <tr><td>Consec. Losses</td><td>${consecutiveLosses}</td></tr>
+</table>`;
+            break;
+        }
+
+        case 'ssq_entry': {
+            const dir = trade.direction === 'long' ? '🟢 LONG' : '🔴 SHORT';
+            subject = `${dir} SSQ: ${sym} @ ${trade.entryPrice || 'market'}`;
+            html = `<h2>SSQ ${trade.direction.toUpperCase()} — ${sym}</h2>
+${MODE_BADGE}
+<table border="1" cellpadding="6" style="border-collapse:collapse">
+<tr><td>Direction</td><td><strong>${trade.direction.toUpperCase()}</strong></td></tr>
+<tr><td>Entry</td><td>${trade.entryPrice || 'unknown (add entry:{{close}} to alert)'}</td></tr>
+<tr><td>Size</td><td>${trade.posSize.toFixed(4)}</td></tr>
+<tr><td>Strategy</td><td>SSQ</td></tr>
+<tr><td>Mode</td><td>${trade.mode}</td></tr>
+</table>`;
+            break;
+        }
+
+        case 'ssq_exit': {
+            const isWin = trade.realizedPnL > 0;
+            subject = `${isWin ? '💰' : '🔴'} SSQ CLOSED ${sym} | ${trade.realizedPnL.toFixed(2)} USDT`;
+            html = `<h2>SSQ Trade Closed — ${sym}</h2>
+${MODE_BADGE}
+<table border="1" cellpadding="6" style="border-collapse:collapse">
+<tr><td>Direction</td><td>${trade.direction.toUpperCase()}</td></tr>
+<tr><td>Entry</td><td>${trade.entryPrice}</td></tr>
+<tr><td>Exit</td><td>${trade.exitPrice}</td></tr>
+<tr><td>Total PnL</td><td style="color:${isWin ? 'green' : 'red'}">${trade.realizedPnL.toFixed(2)} USDT</td></tr>
+<tr><td>Opened</td><td>${trade.openTime}</td></tr>
+<tr><td>Closed</td><td>${trade.closeTime}</td></tr>
 </table>`;
             break;
         }
@@ -816,11 +986,16 @@ app.post('/webhook', async (req, res) => {
     let result;
     try {
         switch (signal) {
-            case 'BUY_SIGNAL':  result = await handleBuySignal(payload);  break;
-            case 'TP1_HIT':     result = await handleTP1Hit(payload);     break;
-            case 'TP2_HIT':     result = await handleTP2Hit(payload);     break;
-            case 'MOVE_STOP':   result = await handleMoveStop(payload);   break;
-            case 'EXIT_TRADE':  result = await handleExitTrade(payload);  break;
+            // Bear Trap Pro signals
+            case 'BUY_SIGNAL':  result = await handleBuySignal(payload);         break;
+            case 'TP1_HIT':     result = await handleTP1Hit(payload);            break;
+            case 'TP2_HIT':     result = await handleTP2Hit(payload);            break;
+            case 'MOVE_STOP':   result = await handleMoveStop(payload);          break;
+            case 'EXIT_TRADE':  result = await handleExitTrade(payload);         break;
+            // SSQ strategy signals
+            case 'LONG_ENTRY':  result = await handleSSQEntry(payload, 'long');  break;
+            case 'SHORT_ENTRY': result = await handleSSQEntry(payload, 'short'); break;
+            case 'EXIT':        result = await handleSSQExit(payload);           break;
             default:
                 log('WARN', `[WEBHOOK] Unknown signal: ${signal}`);
                 return res.status(400).json({ error: `Unknown signal: ${signal}` });
