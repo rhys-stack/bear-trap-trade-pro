@@ -628,8 +628,8 @@ function initMailer() {
     if (process.env.SMTP_HOST && process.env.SMTP_USER) {
         mailer = nodemailer.createTransport({
             host:   process.env.SMTP_HOST,
-            port:   parseInt(process.env.SMTP_PORT || '587'),
-            secure: process.env.SMTP_SECURE === 'true',
+            port:   parseInt(process.env.SMTP_PORT || '465'),
+            secure: process.env.SMTP_SECURE !== 'false',
             auth: {
                 user: process.env.SMTP_USER,
                 pass: process.env.SMTP_PASS,
@@ -979,7 +979,8 @@ app.post('/webhook', async (req, res) => {
     }
 
     // Strategy tag validation (optional but logged)
-    if (payload.strategy && payload.strategy !== 'Bear Trap Trade Pro') {
+    const VALID_STRATEGIES = ['Bear Trap Trade Pro', 'SSQ'];
+    if (payload.strategy && !VALID_STRATEGIES.includes(payload.strategy)) {
         log('WARN', `[WEBHOOK] Unknown strategy tag: ${payload.strategy}`);
     }
 
