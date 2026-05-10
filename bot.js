@@ -7,7 +7,6 @@ const crypto     = require('crypto');
 const fs         = require('fs');
 const path       = require('path');
 const cron       = require('node-cron');
-const nodemailer = require('nodemailer');
 const axios      = require('axios');
 
 // =====================================================================
@@ -621,27 +620,11 @@ async function handleSSQExit(payload) {
 // EMAIL
 // =====================================================================
 
-let mailer     = null;
-let mailerType = null;   // 'smtp' | 'resend' | null  — set once at startup
-
 function initMailer() {
-    if (process.env.SMTP_HOST && process.env.SMTP_USER) {
-        mailer = nodemailer.createTransport({
-            host:   process.env.SMTP_HOST,
-            port:   parseInt(process.env.SMTP_PORT || '465'),
-            secure: process.env.SMTP_SECURE !== 'false',
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS,
-            },
-        });
-        mailerType = 'smtp';
-        log('INFO', `Mailer: SMTP (${process.env.SMTP_HOST})`);
-    } else if (process.env.RESEND_API_KEY) {
-        mailerType = 'resend';
+    if (process.env.RESEND_API_KEY) {
         log('INFO', 'Mailer: Resend API');
     } else {
-        log('WARN', 'No email provider configured — emails disabled');
+        log('WARN', 'No RESEND_API_KEY — emails disabled');
     }
 }
 
@@ -650,19 +633,16 @@ async function sendRaw(subject, html) {
     const to   = process.env.EMAIL_TO;
     if (!from || !to) { log('WARN', `Email skipped — FROM/TO not set`); return; }
 
+    if (!process.env.RESEND_API_KEY) { log('WARN', 'No RESEND_API_KEY — skipping: ' + subject); return; }
+
     try {
-        // Use whichever provider was selected at startup — never mix them
-        if (mailerType === 'smtp' && mailer) {
-            await mailer.sendMail({ from, to, subject, html });
-        } else if (mailerType === 'resend') {
-            await axios.post('https://api.resend.com/emails',
-                { from, to, subject, html },
-                { headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` }, timeout: 10000 }
-            );
-        } else {
-            log('WARN', 'No mailer — skipping: ' + subject);
-            return;
-        }
+        const res = await fetch('https://api.resend.com/emails', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+            body:    JSON.stringify({ from, to, subject, html }),
+            signal:  AbortSignal.timeout(10000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         log('INFO', `Email sent: ${subject}`);
     } catch (err) {
         log('ERROR', `Email failed: ${err.message}`);
