@@ -10,6 +10,18 @@ const cron       = require('node-cron');
 const axios      = require('axios');
 
 // =====================================================================
+// GLOBAL ERROR HANDLERS — surface crashes instead of silently dying
+// =====================================================================
+
+process.on('unhandledRejection', (reason) => {
+    log('ERROR', `Unhandled promise rejection: ${reason?.stack || reason}`);
+});
+process.on('uncaughtException', (err) => {
+    log('ERROR', `Uncaught exception: ${err.stack || err.message}`);
+    process.exit(1);
+});
+
+// =====================================================================
 // CONFIGURATION
 // =====================================================================
 
@@ -825,8 +837,9 @@ async function sendWeeklyReport() {
     const totalPnl = weekTrades.reduce((sum, t) => sum + t.realizedPnL, 0);
     const winRate  = weekTrades.length > 0 ? ((wins.length / weekTrades.length) * 100).toFixed(1) : '0';
 
-    const best  = weekTrades.sort((a, b) => b.realizedPnL - a.realizedPnL)[0];
-    const worst = weekTrades.sort((a, b) => a.realizedPnL - b.realizedPnL)[0];
+    const sorted = [...weekTrades].sort((a, b) => b.realizedPnL - a.realizedPnL);
+    const best   = sorted[0];
+    const worst  = sorted[sorted.length - 1];
 
     const symbols = [...new Set(weekTrades.map(t => t.symbol))];
 
@@ -1002,20 +1015,32 @@ app.use((_req, res) => {
 function initCron() {
     // Daily report — 07:00 UK (Europe/London handles BST automatically)
     cron.schedule('0 7 * * *', async () => {
-        log('INFO', '[CRON] Running daily report');
-        await sendDailyReport();
+        try {
+            log('INFO', '[CRON] Running daily report');
+            await sendDailyReport();
+        } catch (err) {
+            log('ERROR', `[CRON] Daily report failed: ${err.stack || err.message}`);
+        }
     }, { timezone: 'Europe/London' });
 
     // Weekly report — Sunday 08:00 UK
     cron.schedule('0 8 * * 0', async () => {
-        log('INFO', '[CRON] Running weekly report');
-        await sendWeeklyReport();
+        try {
+            log('INFO', '[CRON] Running weekly report');
+            await sendWeeklyReport();
+        } catch (err) {
+            log('ERROR', `[CRON] Weekly report failed: ${err.stack || err.message}`);
+        }
     }, { timezone: 'Europe/London' });
 
     // Midnight daily P&L reset check
     cron.schedule('1 0 * * *', () => {
-        checkPeriodReset();
-        saveState();
+        try {
+            checkPeriodReset();
+            saveState();
+        } catch (err) {
+            log('ERROR', `[CRON] Midnight reset failed: ${err.stack || err.message}`);
+        }
     }, { timezone: 'Europe/London' });
 
     log('INFO', 'Cron jobs scheduled (daily 07:00, weekly Sun 08:00 UK)');
@@ -1045,9 +1070,13 @@ function start() {
     initMailer();
     initCron();
 
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
         log('INFO', `Server listening on port ${PORT}`);
         log('INFO', `Health check: http://localhost:${PORT}/health`);
+    });
+    server.on('error', (err) => {
+        log('ERROR', `Server failed to bind port ${PORT}: ${err.message}`);
+        process.exit(1);
     });
 }
 
