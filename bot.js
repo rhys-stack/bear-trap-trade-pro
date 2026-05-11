@@ -629,6 +629,140 @@ async function handleSSQExit(payload) {
 }
 
 // =====================================================================
+// WILLY STRATEGY HANDLERS
+// =====================================================================
+
+async function executeWillyTrade(payload, direction) {
+    const { ticker } = payload;
+
+    if (activeTrades[ticker]) {
+        log('INFO', `[WILLY] Already in trade for ${ticker} — skipped`);
+        return { status: 'skipped', reason: 'already_in_trade' };
+    }
+
+    checkPeriodReset();
+
+    if (dailyPnL <= -MAX_DAILY_LOSS) {
+        log('WARN', `[WILLY] Daily loss limit hit (${dailyPnL.toFixed(2)}%) — skipped`);
+        return { status: 'skipped', reason: 'daily_loss_limit' };
+    }
+    if (weeklyPnL <= -MAX_WEEKLY_LOSS) {
+        log('WARN', `[WILLY] Weekly loss limit hit (${weeklyPnL.toFixed(2)}%) — skipped`);
+        return { status: 'skipped', reason: 'weekly_loss_limit' };
+    }
+    if (correlatedOpenCount(ticker) >= 2) {
+        log('WARN', `[WILLY] Correlation limit for ${ticker} — skipped`);
+        return { status: 'skipped', reason: 'correlation_limit' };
+    }
+
+    const entryPrice = parseFloat(payload.entry) || 0;
+    if (!entryPrice) {
+        log('WARN', '[WILLY] No entry price in payload — add entry:{{close}} to your TradingView alert message');
+    }
+
+    let accountBalance = LIVE_TRADING ? 0 : parseFloat(process.env.PAPER_BALANCE || '10000');
+    if (LIVE_TRADING) {
+        try {
+            accountBalance = await getAccountBalance();
+            log('INFO', `[LIVE] Account balance: ${accountBalance} USDT`);
+        } catch (err) {
+            log('ERROR', `[LIVE] Balance fetch failed: ${err.message}`);
+            return { status: 'error', reason: err.message };
+        }
+    }
+
+    const posValue = accountBalance * (RISK_PER_TRADE / 100);
+    let posSize = entryPrice > 0 ? posValue / entryPrice : posValue;
+    if (reducedSizing) {
+        posSize *= 0.5;
+        log('WARN', 'Reduced sizing active (2+ consecutive losses)');
+    }
+
+    const trade = {
+        id:            `${ticker}_WILLY_${Date.now()}`,
+        symbol:        ticker,
+        strategy:      'WILLY',
+        direction,
+        entryPrice,
+        posSize,
+        remainingSize: posSize,
+        openTime:      new Date().toISOString(),
+        status:        'OPEN',
+        realizedPnL:   0,
+        mode:          LIVE_TRADING ? 'LIVE' : 'PAPER',
+        liveOrderIds:  {},
+    };
+
+    if (LIVE_TRADING) {
+        try {
+            const side = direction === 'long' ? 'buy' : 'sell';
+            const order = await placeFuturesOrder({ symbol: ticker, side, orderType: 'Market', size: posSize });
+            trade.liveOrderIds.entry = order?.data?.orderId;
+            log('INFO', `[LIVE][WILLY] ${direction.toUpperCase()} order: ${trade.liveOrderIds.entry}`);
+        } catch (err) {
+            log('ERROR', `[LIVE][WILLY] Order failed: ${err.message}`);
+            return { status: 'error', reason: err.message };
+        }
+    } else {
+        log('INFO', `[PAPER][WILLY] ${direction.toUpperCase()} ${ticker} @ ${entryPrice || 'unknown'} | Size: ${posSize.toFixed(4)}`);
+    }
+
+    activeTrades[ticker] = trade;
+    saveState();
+    await sendEmail('ssq_entry', trade);
+    return { status: 'ok', trade };
+}
+
+async function executeWillyExit(payload) {
+    const trade = activeTrades[payload.ticker];
+    if (!trade) return { status: 'skipped', reason: 'no_active_trade' };
+
+    const exitPrice = parseFloat(payload.entry) || 0;
+
+    let finalPnl = 0;
+    if (exitPrice > 0 && trade.entryPrice > 0) {
+        const diff = trade.direction === 'long'
+            ? exitPrice - trade.entryPrice
+            : trade.entryPrice - exitPrice;
+        finalPnl = diff * trade.remainingSize;
+
+        const pnlPct = (finalPnl / (trade.remainingSize * trade.entryPrice)) * 100;
+        dailyPnL  += pnlPct;
+        weeklyPnL += pnlPct;
+    }
+
+    trade.realizedPnL += finalPnl;
+    trade.status    = 'CLOSED';
+    trade.closeTime = new Date().toISOString();
+    trade.exitPrice = exitPrice;
+
+    if (trade.realizedPnL > 0) {
+        consecutiveWins++;
+        consecutiveLosses = 0;
+        if (reducedSizing) {
+            reducedSizing = false;
+            log('INFO', '[RISK] Normal sizing restored after win');
+        }
+    } else {
+        consecutiveLosses++;
+        consecutiveWins = 0;
+        if (consecutiveLosses >= 2 && !reducedSizing) {
+            reducedSizing = true;
+            log('WARN', '[RISK] Reduced sizing activated (2 consecutive losses)');
+        }
+    }
+
+    log('INFO', `[WILLY][EXIT] ${trade.symbol} ${trade.direction} closed @ ${exitPrice} | PnL: ${trade.realizedPnL.toFixed(2)} USDT`);
+
+    tradeHistory.push({ ...trade });
+    delete activeTrades[trade.symbol];
+    saveState();
+    saveHistory();
+    await sendEmail('ssq_exit', trade);
+    return { status: 'ok', trade };
+}
+
+// =====================================================================
 // EMAIL
 // =====================================================================
 
@@ -971,28 +1105,39 @@ app.post('/webhook', async (req, res) => {
         return res.json({ status: 'duplicate_skipped' });
     }
 
-    // Strategy tag validation (optional but logged)
-    const VALID_STRATEGIES = ['Bear Trap Trade Pro', 'SSQ'];
+    // Strategy tag validation
+    const VALID_STRATEGIES = ['Bear Trap Trade Pro', 'SSQ', 'WILLY'];
     if (payload.strategy && !VALID_STRATEGIES.includes(payload.strategy)) {
         log('WARN', `[WEBHOOK] Unknown strategy tag: ${payload.strategy}`);
     }
 
     let result;
     try {
-        switch (signal) {
-            // Bear Trap Pro signals
-            case 'BUY_SIGNAL':  result = await handleBuySignal(payload);         break;
-            case 'TP1_HIT':     result = await handleTP1Hit(payload);            break;
-            case 'TP2_HIT':     result = await handleTP2Hit(payload);            break;
-            case 'MOVE_STOP':   result = await handleMoveStop(payload);          break;
-            case 'EXIT_TRADE':  result = await handleExitTrade(payload);         break;
-            // SSQ strategy signals
-            case 'LONG_ENTRY':  result = await handleSSQEntry(payload, 'long');  break;
-            case 'SHORT_ENTRY': result = await handleSSQEntry(payload, 'short'); break;
-            case 'EXIT':        result = await handleSSQExit(payload);           break;
-            default:
-                log('WARN', `[WEBHOOK] Unknown signal: ${signal}`);
-                return res.status(400).json({ error: `Unknown signal: ${signal}` });
+        if (payload.strategy === 'WILLY') {
+            switch (signal) {
+                case 'LONG_ENTRY':  result = await executeWillyTrade(payload, 'long');  break;
+                case 'SHORT_ENTRY': result = await executeWillyTrade(payload, 'short'); break;
+                case 'EXIT':        result = await executeWillyExit(payload);           break;
+                default:
+                    log('WARN', `[WEBHOOK][WILLY] Unknown signal: ${signal}`);
+                    return res.status(400).json({ error: `Unknown WILLY signal: ${signal}` });
+            }
+        } else {
+            switch (signal) {
+                // Bear Trap Pro signals
+                case 'BUY_SIGNAL':  result = await handleBuySignal(payload);         break;
+                case 'TP1_HIT':     result = await handleTP1Hit(payload);            break;
+                case 'TP2_HIT':     result = await handleTP2Hit(payload);            break;
+                case 'MOVE_STOP':   result = await handleMoveStop(payload);          break;
+                case 'EXIT_TRADE':  result = await handleExitTrade(payload);         break;
+                // SSQ strategy signals
+                case 'LONG_ENTRY':  result = await handleSSQEntry(payload, 'long');  break;
+                case 'SHORT_ENTRY': result = await handleSSQEntry(payload, 'short'); break;
+                case 'EXIT':        result = await handleSSQExit(payload);           break;
+                default:
+                    log('WARN', `[WEBHOOK] Unknown signal: ${signal}`);
+                    return res.status(400).json({ error: `Unknown signal: ${signal}` });
+            }
         }
     } catch (err) {
         log('ERROR', `[WEBHOOK] Handler threw: ${err.message}`);
